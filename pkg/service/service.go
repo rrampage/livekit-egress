@@ -162,7 +162,7 @@ func (s *Service) handleRequest(req *livekit.StartEgressRequest) {
 		}
 	}
 
-	logger.Infow("EGRESS_REQUEST: ", req)
+	logger.Infow("EGRESS_REQUEST: ", "egressRequest", req.String())
 	if !sysload.CanAcceptRequest(req) {
 		logger.Debugw("rejecting request, not enough cpu")
 		return
