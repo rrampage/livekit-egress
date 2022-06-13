@@ -104,6 +104,6 @@ func AcceptRequest(req *livekit.StartEgressRequest, cpuCostConfig config.CPUCost
 	pendingCPUs.Add(cpuHold)
 	time.AfterFunc(time.Second, func() {
 		pendingCPUs.Sub(cpuHold)
-		logger.Debugw("CPU_STAT", "pendingCPU", pendingCPUs)
+		logger.Debugw("CPU_STAT", "pendingCPU", pendingCPUs.Load())
 	})
 }
