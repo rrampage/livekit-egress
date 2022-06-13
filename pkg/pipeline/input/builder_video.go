@@ -98,6 +98,11 @@ func (b *Bin) buildSDKVideoInput(p *params.Params) error {
 			return err
 		}
 
+		if p.OutputType == params.OutputTypeH264 {
+			b.videoElements = append(b.videoElements, src.Element, rtpH264Depay)
+			return nil
+		}
+
 		avDecH264, err := gst.NewElement("avdec_h264")
 		if err != nil {
 			return err
