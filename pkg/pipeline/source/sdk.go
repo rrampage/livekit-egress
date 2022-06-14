@@ -129,6 +129,11 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 				p.VideoCodec = params.MimeTypeH264
 			}
 
+			// If file suffix is .h264 set output type to OutputTypeH264
+			if strings.HasSuffix(p.Filepath, params.FileExtensionH264) {
+				p.OutputType = params.OutputTypeH264
+			}
+
 		default:
 			onSubscribeErr = errors.ErrNotSupported(track.Codec().MimeType)
 			return
@@ -142,7 +147,7 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 		}
 
 		// write blank frames only when writing to mp4
-		writeBlanks := p.VideoCodec == params.MimeTypeH264
+		writeBlanks := p.VideoCodec == params.MimeTypeH264 && p.OutputType != params.OutputTypeH264
 
 		switch track.Kind() {
 		case webrtc.RTPCodecTypeAudio:

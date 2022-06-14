@@ -99,7 +99,15 @@ func (b *Bin) buildSDKVideoInput(p *params.Params) error {
 		}
 
 		if p.OutputType == params.OutputTypeH264 {
-			b.videoElements = append(b.videoElements, src.Element, rtpH264Depay)
+			h264Parser, err := gst.NewElement("h264parse")
+			if err != nil {
+				return err
+			}
+			mp4mux, err := gst.NewElement("mp4mux")
+			if err != nil {
+				return err
+			}
+			b.videoElements = append(b.videoElements, src.Element, rtpH264Depay, h264Parser, mp4mux)
 			return nil
 		}
 

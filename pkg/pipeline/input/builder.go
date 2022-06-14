@@ -87,6 +87,9 @@ func (b *Bin) buildMux(p *params.Params) error {
 	case params.OutputTypeIVF:
 		b.mux, err = gst.NewElement("avmux_ivf")
 
+	case params.OutputTypeH264:
+		return nil
+
 	case params.OutputTypeMP4:
 		b.mux, err = gst.NewElement("mp4mux")
 		if err != nil {
