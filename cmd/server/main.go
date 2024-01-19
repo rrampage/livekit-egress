@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/livekit/protocol/egress"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/tracer"
 
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/errors"
@@ -111,8 +113,14 @@ func runHandler(c *cli.Context) error {
 		return err
 	}
 
+	ctx, span := tracer.Start(context.Background(), "Handler.New")
+	defer span.End()
+
+	logger.Debugw("handler launched")
+
 	rc, err := getRedisClient(conf)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 
@@ -120,6 +128,7 @@ func runHandler(c *cli.Context) error {
 	reqString := c.String("request")
 	err = proto.Unmarshal([]byte(reqString), req)
 	if err != nil {
+		span.RecordError(err)
 		return err
 	}
 
@@ -135,7 +144,7 @@ func runHandler(c *cli.Context) error {
 		handler.Kill()
 	}()
 
-	handler.HandleRequest(req)
+	handler.HandleRequest(ctx, req)
 	return nil
 }
 
@@ -158,11 +167,19 @@ func getConfig(c *cli.Context) (*config.Config, error) {
 
 func getRedisClient(conf *config.Config) (*redis.Client, error) {
 	logger.Infow("connecting to redis", "addr", conf.Redis.Address)
+
+	var tlsConfig *tls.Config
+	if conf.Redis.UseTLS {
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+		}
+	}
 	rc := redis.NewClient(&redis.Options{
-		Addr:     conf.Redis.Address,
-		Username: conf.Redis.Username,
-		Password: conf.Redis.Password,
-		DB:       conf.Redis.DB,
+		Addr:      conf.Redis.Address,
+		Username:  conf.Redis.Username,
+		Password:  conf.Redis.Password,
+		DB:        conf.Redis.DB,
+		TLSConfig: tlsConfig,
 	})
 	err := rc.Ping(context.Background()).Err()
 	return rc, err

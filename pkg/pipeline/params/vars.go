@@ -29,6 +29,7 @@ const (
 	OutputTypeRaw  OutputType = "audio/x-raw"
 	OutputTypeOGG  OutputType = "audio/ogg"
 	OutputTypeIVF  OutputType = "video/x-ivf"
+	OutputTypeH264 OutputType = "video/h264"
 	OutputTypeMP4  OutputType = "video/mp4"
 	OutputTypeTS   OutputType = "video/mp2t"
 	OutputTypeWebM OutputType = "video/webm"
@@ -39,6 +40,7 @@ const (
 	FileExtensionRaw  = ".raw"
 	FileExtensionOGG  = ".ogg"
 	FileExtensionIVF  = ".ivf"
+	FileExtensionH264 = ".h264"
 	FileExtensionMP4  = ".mp4"
 	FileExtensionTS   = ".ts"
 	FileExtensionWebM = ".webm"
@@ -58,6 +60,7 @@ var (
 
 	DefaultVideoCodecs = map[OutputType]MimeType{
 		OutputTypeIVF:  MimeTypeVP8,
+		OutputTypeH264: MimeTypeH264,
 		OutputTypeMP4:  MimeTypeH264,
 		OutputTypeTS:   MimeTypeH264,
 		OutputTypeWebM: MimeTypeVP8,
@@ -69,6 +72,7 @@ var (
 		OutputTypeRaw:  FileExtensionRaw,
 		OutputTypeOGG:  FileExtensionOGG,
 		OutputTypeIVF:  FileExtensionIVF,
+		OutputTypeH264: FileExtensionH264,
 		OutputTypeMP4:  FileExtensionMP4,
 		OutputTypeTS:   FileExtensionTS,
 		OutputTypeWebM: FileExtensionWebM,
@@ -84,6 +88,9 @@ var (
 		},
 		OutputTypeIVF: {
 			MimeTypeVP8: true,
+		},
+		OutputTypeH264: {
+			MimeTypeH264: true,
 		},
 		OutputTypeMP4: {
 			MimeTypeAAC:  true,

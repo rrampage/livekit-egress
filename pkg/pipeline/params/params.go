@@ -1,6 +1,7 @@
 package params
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"os"
@@ -11,14 +12,17 @@ import (
 	"github.com/livekit/protocol/egress"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/tracer"
 
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/errors"
 )
 
 type Params struct {
-	Logger logger.Logger
-	Info   *livekit.EgressInfo
+	conf     *config.Config
+	Logger   logger.Logger
+	Info     *livekit.EgressInfo
+	GstReady chan struct{}
 
 	SourceParams
 	AudioParams
@@ -32,7 +36,7 @@ type Params struct {
 	FileParams
 	SegmentedFileParams
 
-	UploadParams
+	FileUpload interface{}
 }
 
 type SourceParams struct {
@@ -93,12 +97,23 @@ type SegmentedFileParams struct {
 	SegmentDuration  int
 }
 
-type UploadParams struct {
-	FileUpload interface{}
+func ValidateRequest(ctx context.Context, conf *config.Config, request *livekit.StartEgressRequest) (*livekit.EgressInfo, error) {
+	ctx, span := tracer.Start(ctx, "Params.ValidateRequest")
+	defer span.End()
+
+	p, err := getPipelineParams(conf, request)
+	return p.Info, err
 }
 
-// GetPipelineParams must always return params, even on error
-func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest) (p *Params, err error) {
+func GetPipelineParams(ctx context.Context, conf *config.Config, request *livekit.StartEgressRequest) (*Params, error) {
+	ctx, span := tracer.Start(ctx, "Params.GetPipelineParams")
+	defer span.End()
+
+	return getPipelineParams(conf, request)
+}
+
+// getPipelineParams must always return params with valid info, even on error
+func getPipelineParams(conf *config.Config, request *livekit.StartEgressRequest) (p *Params, err error) {
 	// start with defaults
 	p = &Params{
 		Logger: logger.Logger(logger.GetLogger().WithValues("egressID", request.EgressId)),
@@ -107,6 +122,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 			RoomId:   request.RoomId,
 			Status:   livekit.EgressStatus_EGRESS_STARTING,
 		},
+		GstReady: make(chan struct{}),
 		AudioParams: AudioParams{
 			AudioBitrate:   128,
 			AudioFrequency: 44100,
@@ -119,6 +135,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 			Framerate:    30,
 			VideoBitrate: 4500,
 		},
+		conf: conf,
 	}
 
 	switch req := request.Request.(type) {
@@ -156,7 +173,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 		switch o := req.RoomComposite.Output.(type) {
 		case *livekit.RoomCompositeEgressRequest_File:
 			p.updateOutputType(o.File.FileType)
-			if err = p.updateFileParams(conf, o.File.Filepath, o.File.Output); err != nil {
+			if err = p.updateFileParams(o.File.Filepath, o.File.Output); err != nil {
 				return
 			}
 
@@ -167,7 +184,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 
 		case *livekit.RoomCompositeEgressRequest_Segments:
 			p.updateOutputType(o.Segments.Protocol)
-			if err = p.updateSegmentsParams(conf, o.Segments.FilenamePrefix, o.Segments.PlaylistName, o.Segments.SegmentDuration, o.Segments.Output); err != nil {
+			if err = p.updateSegmentsParams(o.Segments.FilenamePrefix, o.Segments.PlaylistName, o.Segments.SegmentDuration, o.Segments.Output); err != nil {
 				return
 			}
 
@@ -210,7 +227,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 			if o.File.FileType != livekit.EncodedFileType_DEFAULT_FILETYPE {
 				p.updateOutputType(o.File.FileType)
 			}
-			if err = p.updateFileParams(conf, o.File.Filepath, o.File.Output); err != nil {
+			if err = p.updateFileParams(o.File.Filepath, o.File.Output); err != nil {
 				return
 			}
 
@@ -221,7 +238,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 
 		case *livekit.TrackCompositeEgressRequest_Segments:
 			p.updateOutputType(o.Segments.Protocol)
-			if err = p.updateSegmentsParams(conf, o.Segments.FilenamePrefix, o.Segments.PlaylistName, o.Segments.SegmentDuration, o.Segments.Output); err != nil {
+			if err = p.updateSegmentsParams(o.Segments.FilenamePrefix, o.Segments.PlaylistName, o.Segments.SegmentDuration, o.Segments.Output); err != nil {
 				return
 			}
 
@@ -249,7 +266,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 		// output params
 		switch o := req.Track.Output.(type) {
 		case *livekit.TrackEgressRequest_File:
-			if err = p.updateFileParams(conf, o.File.Filepath, o.File.Output); err != nil {
+			if err = p.updateFileParams(o.File.Filepath, o.File.Output); err != nil {
 				return
 			}
 		case *livekit.TrackEgressRequest_WebsocketUrl:
@@ -267,7 +284,7 @@ func GetPipelineParams(conf *config.Config, request *livekit.StartEgressRequest)
 		return
 	}
 
-	if err = p.updateConnectionInfo(conf, request); err != nil {
+	if err = p.updateConnectionInfo(request); err != nil {
 		return
 	}
 
@@ -372,7 +389,7 @@ func (p *Params) updateOutputType(fileType interface{}) {
 	}
 }
 
-func (p *Params) updateFileParams(conf *config.Config, filepath string, output interface{}) error {
+func (p *Params) updateFileParams(filepath string, output interface{}) error {
 	p.EgressType = EgressTypeFile
 	p.Filepath = filepath
 	p.FileInfo = &livekit.FileInfo{}
@@ -387,7 +404,7 @@ func (p *Params) updateFileParams(conf *config.Config, filepath string, output i
 	case *livekit.EncodedFileOutput_Gcp:
 		p.FileUpload = o.Gcp
 	default:
-		p.FileUpload = conf.FileUpload
+		p.FileUpload = p.conf.FileUpload
 	}
 
 	// filename
@@ -434,7 +451,7 @@ func (p *Params) updateStreamParams(outputType OutputType, urls []string) error 
 	return nil
 }
 
-func (p *Params) updateSegmentsParams(conf *config.Config, fileprefix string, playlistFilename string, segmentDuration uint32, output interface{}) error {
+func (p *Params) updateSegmentsParams(fileprefix string, playlistFilename string, segmentDuration uint32, output interface{}) error {
 	p.EgressType = EgressTypeSegmentedFile
 	p.LocalFilePrefix = fileprefix
 	p.PlaylistFilename = playlistFilename
@@ -454,7 +471,7 @@ func (p *Params) updateSegmentsParams(conf *config.Config, fileprefix string, pl
 	case *livekit.EncodedFileOutput_Gcp:
 		p.FileUpload = o.Gcp
 	default:
-		p.FileUpload = conf.FileUpload
+		p.FileUpload = p.conf.FileUpload
 	}
 
 	// filename
@@ -466,12 +483,12 @@ func (p *Params) updateSegmentsParams(conf *config.Config, fileprefix string, pl
 	return nil
 }
 
-func (p *Params) updateConnectionInfo(conf *config.Config, request *livekit.StartEgressRequest) error {
+func (p *Params) updateConnectionInfo(request *livekit.StartEgressRequest) error {
 	// token
 	if request.Token != "" {
 		p.Token = request.Token
-	} else if conf.ApiKey != "" && conf.ApiSecret != "" {
-		token, err := egress.BuildEgressToken(p.Info.EgressId, conf.ApiKey, conf.ApiSecret, p.RoomName)
+	} else if p.conf.ApiKey != "" && p.conf.ApiSecret != "" {
+		token, err := egress.BuildEgressToken(p.Info.EgressId, p.conf.ApiKey, p.conf.ApiSecret, p.RoomName)
 		if err != nil {
 			return err
 		}
@@ -483,8 +500,8 @@ func (p *Params) updateConnectionInfo(conf *config.Config, request *livekit.Star
 	// url
 	if request.WsUrl != "" {
 		p.LKUrl = request.WsUrl
-	} else if conf.WsUrl != "" {
-		p.LKUrl = conf.WsUrl
+	} else if p.conf.WsUrl != "" {
+		p.LKUrl = p.conf.WsUrl
 	} else {
 		return errors.ErrInvalidInput("ws_url")
 	}
@@ -542,70 +559,75 @@ func (p *Params) UpdateOutputTypeFromCodecs(fileIdentifier string) error {
 func (p *Params) updateFilename(identifier string) error {
 	ext := FileExtensions[p.OutputType]
 
-	filename := p.Filepath
-	if filename == "" || strings.HasSuffix(filename, "/") {
-		filename = fmt.Sprintf("%s%s-%v%v", filename, identifier, time.Now().String(), ext)
-	} else if !strings.HasSuffix(filename, string(ext)) {
-		filename = filename + string(ext)
+	if p.Filepath == "" || strings.HasSuffix(p.Filepath, "/") {
+		p.Filepath = fmt.Sprintf("%s%s-%v%v", p.Filepath, identifier, time.Now().String(), ext)
+	} else if !strings.HasSuffix(p.Filepath, string(ext)) {
+		p.Filepath = p.Filepath + string(ext)
 	}
-
-	// Update the file path to the generated filename if we changed it above
-	p.Filepath = filename
 
 	// get filename from path
-	idx := strings.LastIndex(filename, "/")
-	if idx > 0 {
-		if p.FileUpload == nil {
-			if err := os.MkdirAll(filename[:idx], os.ModeDir); err != nil {
+	dir, filename := path.Split(p.Filepath)
+	if p.FileUpload == nil {
+		if dir != "" {
+			// create local directory
+			if err := os.MkdirAll(dir, os.ModeDir); err != nil {
 				return err
 			}
-		} else {
-			filename = filename[idx+1:]
 		}
+		p.Filename = p.Filepath
+	} else {
+		// Prepend the configuration base directory and the egress Id
+		outDir := path.Join(p.conf.LocalOutputDirectory, p.Info.EgressId)
+
+		// create temporary directory
+		// os.ModeDir creates a directory with mode 000 when mapping the directory outside the container
+		if err := os.MkdirAll(outDir, os.ModePerm&0o700); err != nil {
+			return err
+		}
+		p.Filename = path.Join(outDir, filename)
 	}
 
-	p.Logger.Debugw("writing to file", "filename", filename)
-	p.Filename = filename
-	p.FileInfo.Filename = filename
+	p.FileInfo.Filename = p.Filename
+	p.Logger.Debugw("writing to file", "filename", p.Filename)
 	return nil
 }
 
 func (p *Params) updatePrefixAndPlaylist(identifier string) error {
-	// TODO fix filename generation code
-	fileprefix := p.LocalFilePrefix
 	ext := FileExtensions[p.OutputType]
 
-	if fileprefix == "" || strings.HasSuffix(fileprefix, "/") {
-		fileprefix = fmt.Sprintf("%s%s-%v", fileprefix, identifier, time.Now().String())
+	if p.LocalFilePrefix == "" || strings.HasSuffix(p.LocalFilePrefix, "/") {
+		p.LocalFilePrefix = fmt.Sprintf("%s%s-%v", p.LocalFilePrefix, identifier, time.Now().String())
 	}
-
-	p.TargetDirectory, _ = path.Split(fileprefix)
-
-	// get filename from path
-	idx := strings.LastIndex(fileprefix, "/")
-	if idx > 0 {
-		if p.FileUpload == nil {
-			if err := os.MkdirAll(fileprefix[:idx], os.ModeDir); err != nil {
-				return err
-			}
-		} else {
-			fileprefix = fileprefix[idx+1:]
-		}
-	}
-
-	p.LocalFilePrefix = fileprefix
-
-	p.Logger.Debugw("writing to path", "prefix", fileprefix)
 
 	// Playlist path is relative to file prefix. Only keep actual filename if a full path is given
 	_, p.PlaylistFilename = path.Split(p.PlaylistFilename)
 	if p.PlaylistFilename == "" {
 		p.PlaylistFilename = fmt.Sprintf("playlist%s", ext)
 	}
-	// Prepend the fileprefix directory to get the full playlist path
-	dir, _ := path.Split(fileprefix)
-	p.PlaylistFilename = path.Join(dir, p.PlaylistFilename)
-	p.SegmentsInfo.PlaylistName = p.PlaylistFilename
+
+	var filePrefix string
+	p.TargetDirectory, filePrefix = path.Split(p.LocalFilePrefix)
+	if p.FileUpload == nil {
+		if p.TargetDirectory != "" {
+			if err := os.MkdirAll(p.TargetDirectory, os.ModeDir); err != nil {
+				return err
+			}
+		}
+		p.PlaylistFilename = path.Join(p.TargetDirectory, p.PlaylistFilename)
+	} else {
+		// Prepend the configuration base directory and the egress Id
+		// os.ModeDir creates a directory with mode 000 when mapping the directory outside the container
+		outDir := path.Join(p.conf.LocalOutputDirectory, p.Info.EgressId)
+		if err := os.MkdirAll(outDir, os.ModePerm&0o700); err != nil {
+			return err
+		}
+
+		p.PlaylistFilename = path.Join(outDir, p.PlaylistFilename)
+		p.LocalFilePrefix = path.Join(outDir, filePrefix)
+	}
+	p.Logger.Debugw("writing to path", "prefix", p.LocalFilePrefix)
+
+	p.SegmentsInfo.PlaylistName = p.GetTargetPathForFilename(p.PlaylistFilename)
 	return nil
 }
 

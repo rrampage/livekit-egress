@@ -1,6 +1,7 @@
 package source
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/tracer"
 	lksdk "github.com/livekit/server-sdk-go"
 
 	"github.com/livekit/egress/pkg/errors"
@@ -50,7 +52,10 @@ type SDKSource struct {
 	endRecording chan struct{}
 }
 
-func NewSDKSource(p *params.Params) (*SDKSource, error) {
+func NewSDKSource(ctx context.Context, p *params.Params) (*SDKSource, error) {
+	ctx, span := tracer.Start(ctx, "SDKSource.New")
+	defer span.End()
+
 	s := &SDKSource{
 		room:         lksdk.CreateRoom(),
 		logger:       p.Logger,
@@ -129,6 +134,11 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 				p.VideoCodec = params.MimeTypeH264
 			}
 
+			// If file suffix is .h264 set output type to OutputTypeH264
+			if strings.HasSuffix(p.Filepath, params.FileExtensionH264) {
+				p.OutputType = params.OutputTypeH264
+			}
+
 		default:
 			onSubscribeErr = errors.ErrNotSupported(track.Codec().MimeType)
 			return
@@ -142,8 +152,9 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 		}
 
 		// write blank frames only when writing to mp4
-		writeBlanks := p.VideoCodec == params.MimeTypeH264
+		writeBlanks := p.VideoCodec == params.MimeTypeH264 && p.OutputType != params.OutputTypeH264
 
+		<-p.GstReady
 		switch track.Kind() {
 		case webrtc.RTPCodecTypeAudio:
 			s.audioSrc = app.SrcFromElement(src)
@@ -169,7 +180,7 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 		}
 	}
 
-	if err := s.join(p); err != nil {
+	if err := s.join(ctx, p); err != nil {
 		return nil, err
 	}
 
@@ -188,7 +199,10 @@ func NewSDKSource(p *params.Params) (*SDKSource, error) {
 	return s, nil
 }
 
-func (s *SDKSource) join(p *params.Params) error {
+func (s *SDKSource) join(ctx context.Context, p *params.Params) error {
+	ctx, span := tracer.Start(ctx, "SDKSource.join")
+	defer span.End()
+
 	s.logger.Debugw("connecting to room")
 	if err := s.room.JoinWithToken(p.LKUrl, p.Token, lksdk.WithAutoSubscribe(false)); err != nil {
 		return err

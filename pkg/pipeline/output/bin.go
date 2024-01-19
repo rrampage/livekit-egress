@@ -1,9 +1,12 @@
 package output
 
 import (
+	"context"
+
 	"github.com/tinyzimmer/go-gst/gst"
 
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/tracer"
 
 	"github.com/livekit/egress/pkg/errors"
 	"github.com/livekit/egress/pkg/pipeline/params"
@@ -26,7 +29,10 @@ type streamSink struct {
 	sink  *gst.Element
 }
 
-func Build(p *params.Params) (*Bin, error) {
+func Build(ctx context.Context, p *params.Params) (*Bin, error) {
+	ctx, span := tracer.Start(ctx, "Output.Build")
+	defer span.End()
+
 	switch p.EgressType {
 	case params.EgressTypeFile:
 		return buildFileOutputBin(p)
@@ -145,12 +151,12 @@ func (b *Bin) RemoveSink(url string) error {
 	return nil
 }
 
-func (b *Bin) RemoveSinkByName(name string) error {
+func (b *Bin) RemoveSinkByName(name string) (string, error) {
 	for url, sink := range b.sinks {
 		if sink.queue.GetName() == name || sink.sink.GetName() == name {
-			return b.RemoveSink(url)
+			return url, b.RemoveSink(url)
 		}
 	}
 
-	return errors.ErrStreamNotFound
+	return "", errors.ErrStreamNotFound
 }
